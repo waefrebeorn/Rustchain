@@ -546,6 +546,9 @@ PASSPORT_TEMPLATE = """
                 if (data.ok && data.qr_code) {
                     img.src = data.qr_code;
                     container.style.display = 'block';
+                } else {
+                    container.innerHTML = '<p style=\"color: var(--text-secondary);\">QR code generation unavailable</p>';
+                    container.style.display = 'block';
                 }
             } catch (error) {
                 console.error('Failed to load QR code:', error);

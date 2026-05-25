@@ -969,7 +969,17 @@ def setup_test_scenario(db_path: str):
                 PRIMARY KEY (epoch, miner_id)
             )
         """)
-        
+
+        # Performance indexes for anti-double-mining lookups
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_epoch_enroll_epoch
+            ON epoch_enroll(epoch)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_miner_fingerprint_miner_ts
+            ON miner_fingerprint_history(miner, ts)
+        """)
+
         # Insert test data
         current_ts = int(time.time())
         epoch = 0
