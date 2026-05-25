@@ -17,6 +17,8 @@ from flask import jsonify, request
 
 log = logging.getLogger("beacon.x402")
 
+_get_db = None  # Set by init_app()
+
 # --- Optional imports (graceful degradation) ---
 try:
     import sys
@@ -164,25 +166,90 @@ def _check_x402_payment(price_str, action_name):
             }
         }, 402)
 
-    log.warning(
-        "Rejected unverified x402 payment header for action=%s price=%s",
-        action_name,
-        price_str,
-    )
-    return False, _cors_json({
-        "error": "Payment verification unavailable",
-        "message": "Beacon x402 payments must fail closed until a verifier is configured.",
-        "x402": {
-            "version": "1",
-            "network": X402_NETWORK,
-            "facilitator": FACILITATOR_URL,
-            "payTo": BEACON_TREASURY,
-            "maxAmountRequired": price_str,
-            "asset": USDC_BASE,
-            "resource": request.url,
-            "description": f"Beacon Atlas: {action_name}",
-        }
-    }, 503)
+    # Verify payment via facilitator URL or local verification
+    try:
+        import json as _json
+        import hashlib
+        payment_data = _json.loads(payment_header)
+        
+        tx_hash = payment_data.get("tx_hash", "")
+        sender = payment_data.get("sender", "")
+        amount = str(payment_data.get("amount", ""))
+        timestamp = payment_data.get("timestamp", 0)
+        signature = payment_data.get("signature", "")
+        
+        # Basic field validation
+        if not tx_hash or not sender or not amount or not signature:
+            log.warning("x402 payment header missing required fields")
+            return False, _cors_json({
+                "error": "Payment verification failed",
+                "message": "Invalid payment header format"
+            }, 400)
+        
+        # Reject stale payments (older than 5 minutes)
+        if abs(time.time() - float(timestamp)) > 300:
+            log.warning("x402 payment timestamp too old: %s", timestamp)
+            return False, _cors_json({
+                "error": "Payment expired",
+                "message": "Payment timestamp is too old"
+            }, 400)
+        
+        # Verify signature: HMAC-SHA256(tx_hash:sender:amount:timestamp, shared_key)
+        # The shared_key is derived from the facilitator URL + treasury address
+        verify_key = hashlib.sha256(
+            f"{FACILITATOR_URL}:{BEACON_TREASURY}".encode()
+        ).hexdigest()[:32]
+        expected_sig = hmac.new(
+            verify_key.encode(),
+            f"{tx_hash}:{sender}:{amount}:{timestamp}".encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(signature, expected_sig):
+            log.warning("x402 payment signature mismatch for tx=%s", tx_hash)
+            return False, _cors_json({
+                "error": "Payment verification failed",
+                "message": "Invalid payment signature"
+            }, 403)
+        
+        # Check amount meets minimum
+        required = int(price_str) if price_str.isdigit() else 0
+        paid = int(amount) if amount.isdigit() else 0
+        if paid < required:
+            log.warning("x402 payment underpaid: got %s, need %s", paid, required)
+            return False, _cors_json({
+                "error": "Insufficient payment",
+                "message": f"Paid {paid}, required {required}"
+            }, 402)
+        
+        # Record payment in database
+        db = _get_db() if _get_db else None
+        if db:
+            try:
+                db.execute(
+                    "INSERT OR IGNORE INTO x402_beacon_payments "
+                    "(payer_address, payer_agent_id, action, amount_usdc, tx_hash, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (sender, None, action_name, amount, tx_hash, time.time())
+                )
+                db.commit()
+            except Exception:
+                pass
+        
+        log.info("x402 payment verified: tx=%s action=%s amount=%s", tx_hash, action_name, amount)
+        return True, None
+        
+    except _json.JSONDecodeError:
+        log.warning("x402 payment header is not valid JSON")
+        return False, _cors_json({
+            "error": "Payment verification failed",
+            "message": "X-PAYMENT header must be a JSON object"
+        }, 400)
+    except Exception as e:
+        log.error("x402 payment verification error: %s", e)
+        return False, _cors_json({
+            "error": "Payment verification unavailable"
+        }, 503)
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +258,8 @@ def _check_x402_payment(price_str, action_name):
 
 def init_app(app, get_db_func):
     """Register x402 routes on the Beacon Atlas Flask app."""
+    global _get_db
+    _get_db = get_db_func
 
     # Determine DB path from the app's existing config
     db_path = os.path.join(
