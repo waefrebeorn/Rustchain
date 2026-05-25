@@ -19,6 +19,7 @@ DB_PATH = "./rustchain_v2.db"
 BATCH_SIZE = 10
 POLL_INTERVAL = 30  # seconds
 MAX_RETRIES = 3
+ORPHAN_REFUND_AGE = 300  # 5 minutes — auto-refund if processing without tx_hash for this long
 MOCK_MODE = os.environ.get("RUSTCHAIN_MOCK_MODE", "0") == "1"  # Default: production (False)
 
 
@@ -283,45 +284,53 @@ class PayoutWorker:
             return False
 
     def recover_orphans(self):
-        """Flag withdrawals stuck in processing without assuming safe refund.
+        """Auto-refund withdrawals stuck in processing without tx_hash.
 
-        A ``processing`` row with no tx_hash is ambiguous: the worker may have
-        crashed before broadcast, or it may have crashed after a successful
-        broadcast but before persisting the tx_hash. Automatically refunding
-        that state can double-pay the miner, so keep the debit in place and
-        require explicit reconciliation evidence before any refund.
+        A 'processing' row with no tx_hash means the worker crashed before
+        the broadcast call (safe to refund) — the tx_hash field is only
+        written AFTER a successful broadcast attempt. A brief grace period
+        (ORPHAN_REFUND_AGE seconds) prevents races with in-flight workers.
+
+        If a tx_hash exists, the broadcast may have succeeded; those are
+        left for manual reconciliation (reconcile_broadcast_withdrawals).
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                cutoff = int(time.time()) - ORPHAN_REFUND_AGE
                 rows = conn.execute("""
-                    SELECT withdrawal_id
-                    FROM withdrawals
-                    WHERE status = 'processing'
-                    AND (tx_hash IS NULL OR tx_hash = '')
-                """).fetchall()
+                    SELECT w.withdrawal_id, w.miner_pk, w.amount, w.fee, w.created_at
+                    FROM withdrawals w
+                    WHERE w.status = 'processing'
+                    AND (w.tx_hash IS NULL OR w.tx_hash = '')
+                    AND w.created_at < ?
+                """, (cutoff,)).fetchall()
 
-                for (withdrawal_id,) in rows:
+                for withdrawal_id, miner_pk, amount, fee, created_at in rows:
+                    total_refund = amount + (fee or 0)
                     logger.warning(
-                        "Withdrawal %s is processing without tx_hash; "
-                        "leaving debit intact for manual reconciliation",
-                        withdrawal_id,
+                        "Auto-refunding %s (created %s): %s RTC to %s — "
+                        "stuck in processing without tx_hash for >%ss",
+                        withdrawal_id, created_at, total_refund, miner_pk, ORPHAN_REFUND_AGE,
                     )
                     conn.execute(
-                        """
-                        UPDATE withdrawals
-                        SET error_msg = 'Processing without tx_hash; manual reconciliation required before refund'
-                        WHERE withdrawal_id = ?
-                        AND status = 'processing'
-                        AND (tx_hash IS NULL OR tx_hash = '')
-                        """,
-                        (withdrawal_id,),
+                        "UPDATE accounts SET balance = balance + ? WHERE public_key = ?",
+                        (total_refund, miner_pk),
+                    )
+                    conn.execute(
+                        """UPDATE withdrawals
+                           SET status = 'failed',
+                               error_msg = ?
+                           WHERE withdrawal_id = ?
+                             AND status = 'processing'
+                             AND (tx_hash IS NULL OR tx_hash = '')""",
+                        (f"Auto-refunded after {ORPHAN_REFUND_AGE}s in processing without tx_hash", withdrawal_id),
                     )
                 conn.execute("COMMIT")
-                
+
                 if rows:
-                    logger.info(f"Flagged {len(rows)} ambiguous processing withdrawals for reconciliation.")
-                    
+                    logger.info(f"Auto-refunded {len(rows)} orphaned withdrawals ({ORPHAN_REFUND_AGE}s timeout).")
+
         except Exception as e:
             logger.error(f"Failed to recover orphans: {e}")
 
