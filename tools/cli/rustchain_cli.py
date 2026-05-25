@@ -511,33 +511,43 @@ def cmd_bounty(args):
             print("Error: Please provide a wallet address or set RUSTCHAIN_WALLET", file=sys.stderr)
             sys.exit(1)
 
-        # Bounty claim requires server interaction - not implemented in CLI-only mode
-        if not dry_run:
-            print("Error: Bounty claim requires a running RustChain node.", file=sys.stderr)
-            print("This CLI is read-only. Use --dry-run for local simulation only.", file=sys.stderr)
-            print("SIMULATION ONLY: No server call will be made.", file=sys.stderr)
+        # Submit bounty claim to node API
+        node_url = get_node_url()
+        payload = json.dumps({
+            "claimant_wallet": wallet,
+            "bounty_id": args.bounty_id
+        }).encode()
+
+        try:
+            from urllib.request import Request
+            req = Request(
+                f"{node_url}/api/bounties/{args.bounty_id}/claim",
+                data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "RustChain-CLI/0.1"}
+            )
+            with urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode())
+        except HTTPError as e:
+            error_body = e.read().decode() if e.fp else "Unknown error"
+            try:
+                error_detail = json.loads(error_body).get("reason", error_body)
+            except json.JSONDecodeError:
+                error_detail = error_body
+            print(f"Error: Claim rejected by node ({e.code}): {error_detail}", file=sys.stderr)
+            return 1
+        except URLError as e:
+            print(f"Error: Cannot connect to node: {e.reason}", file=sys.stderr)
+            print("Tip: Check RUSTCHAIN_NODE or use --dry-run for simulation.", file=sys.stderr)
             return 1
 
-        # Simulate bounty claim submission (SIMULATION ONLY)
-        claim_data = {
-            "bounty_id": args.bounty_id,
-            "claimant_wallet": wallet,
-            "claimed_at": datetime.now().isoformat(),
-            "status": "pending_review",
-            "claim_id": hashlib.sha256(f"{args.bounty_id}:{wallet}".encode()).hexdigest()[:12],
-            "_simulation_only": True
-        }
-
         if use_json:
-            print(json.dumps(claim_data, indent=2))
+            print(json.dumps(result, indent=2))
         else:
-            print("=== SIMULATION ONLY - NO SERVER CALL MADE ===")
-            print(f"Claim ID:    {claim_data['claim_id']}")
-            print(f"Bounty ID:   {claim_data['bounty_id']}")
-            print(f"Your Wallet: {claim_data['claimant_wallet']}")
-            print(f"Status:      {claim_data['status'].replace('_', ' ').title()}")
-            print(f"\n⚠️  SIMULATION ONLY: This claim was NOT submitted to the server.")
-        return 0
+            print("=== Bounty Claim Submitted ===")
+            print(f"Bounty ID:   {result.get('bounty_id', args.bounty_id)}")
+            print(f"Claimant:    {result.get('claimant', wallet)}")
+            print(f"Status:      pending_review")
+            print(f"Node:        ✅ Submitted to {node_url}")
     
     parser = argparse.ArgumentParser(prog="rustchain-cli bounty")
     parser.print_help()
@@ -564,38 +574,71 @@ def cmd_x402(args):
             print("Error: Amount must be a number", file=sys.stderr)
             sys.exit(1)
 
-        # x402 payment requires server interaction - not implemented in CLI-only mode
-        if not dry_run:
-            print("Error: x402 payment requires a running RustChain node.", file=sys.stderr)
-            print("This CLI is read-only. Use --dry-run for local simulation only.", file=sys.stderr)
-            print("SIMULATION ONLY: No server call will be made.", file=sys.stderr)
+        # Initiate x402 payment via node API
+        node_url = get_node_url()
+        payload = json.dumps({
+            "sender_wallet": wallet,
+            "recipient": args.recipient,
+            "amount_rtc": amount
+        }).encode()
+
+        try:
+            from urllib.request import Request
+            req = Request(
+                f"{node_url}/api/x402/payments",
+                data=payload,
+                method="POST",
+                headers={"Content-Type": "application/json", "User-Agent": "RustChain-CLI/0.1"}
+            )
+            with urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode())
+                if use_json:
+                    print(json.dumps(result, indent=2))
+                else:
+                    print("=== x402 Payment Initiated ===")
+                    print(f"Payment ID:  {result.get('payment_id', 'N/A')}")
+                    print(f"From:        {wallet}")
+                    print(f"To:          {args.recipient}")
+                    print(f"Amount:      {amount:.2f} RTC")
+                    print(f"Status:      {result.get('status', 'pending')}")
+                    print(f"Fee:         {result.get('fee_rtc', amount * 0.001):.4f} RTC")
+                    print(f"Node:        ✅ {node_url}")
+        except HTTPError as e:
+            error_body = e.read().decode() if e.fp else "Unknown error"
+            try:
+                error_detail = json.loads(error_body).get("reason", error_body)
+            except json.JSONDecodeError:
+                error_detail = error_body
+            print(f"Error: Payment rejected by node ({e.code}): {error_detail}", file=sys.stderr)
+            return 1
+        except URLError as e:
+            print(f"Error: Cannot connect to node: {e.reason}", file=sys.stderr)
+            print("Tip: Check RUSTCHAIN_NODE or use --dry-run for simulation.", file=sys.stderr)
             return 1
 
-        # Simulate x402 payment (SIMULATION ONLY)
-        payment_id = hashlib.sha256(f"{wallet}:{args.recipient}:{amount}".encode()).hexdigest()[:16]
-        payment_data = {
-            "payment_id": f"x402_{payment_id}",
-            "from": wallet,
-            "to": args.recipient,
-            "amount_rtc": amount,
-            "timestamp": datetime.now().isoformat(),
-            "status": "completed",
-            "protocol": "x402",
-            "fee_rtc": amount * 0.001,  # 0.1% fee
-            "_simulation_only": True
-        }
+        return 0
+
+    elif args.action == "status":
+        if not args.payment_id:
+            print("Error: Please provide a payment ID", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            data = fetch_api(f"/api/x402/status?payment_id={args.payment_id}")
+        except RustChainAPIError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
 
         if use_json:
-            print(json.dumps(payment_data, indent=2))
+            print(json.dumps(data, indent=2))
         else:
-            print("=== SIMULATION ONLY - NO SERVER CALL MADE ===")
-            print(f"Payment ID: {payment_data['payment_id']}")
-            print(f"From:       {payment_data['from']}")
-            print(f"To:         {payment_data['to']}")
-            print(f"Amount:     {payment_data['amount_rtc']:.2f} RTC")
-            print(f"Fee:        {payment_data['fee_rtc']:.4f} RTC")
-            print(f"Status:     {payment_data['status'].title()}")
-            print(f"\n⚠️  SIMULATION ONLY: This payment was NOT sent on the server.")
+            print("=== x402 Payment Status ===")
+            print(f"Payment ID:  {data.get('payment_id', args.payment_id)}")
+            print(f"Status:      {data.get('status', 'unknown')}")
+            print(f"Amount:      {data.get('amount_rtc', 0):.2f} RTC")
+            print(f"From:        {data.get('sender', 'N/A')}")
+            print(f"To:          {data.get('recipient', 'N/A')}")
+            print(f"Timestamp:   {data.get('timestamp', 'N/A')}")
         return 0
     
     elif args.action == "history":
