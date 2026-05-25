@@ -103,7 +103,7 @@
 
 | Cell | Gap |
 |------|-----|
-| M1 | bridge_api.py: create_bridge_transfer no timeout on external network calls |
+| M1 | bridge_api.py: create_bridge_transfer no timeout on external network calls | ✅ |
 | M2 | beacon_api.py: create_contract no validation on JSON fields |
 | M3 | bottube_embed.py: _fetch_videos no timeout on DB queries |
 | M4 | governance.py: propose() no fee validation |
@@ -183,6 +183,6 @@
 - **Row H** — Economic — expandable
 - **Row I** — Cross-repo — expandable
 
-**56 cells vaulted. ~360 fresh gaps to hunt.**
+**96 cells vaulted. ~304 fresh gaps to hunt.**
 
 Pick lowest undone coordinate by row priority: S → M → D → E → T
