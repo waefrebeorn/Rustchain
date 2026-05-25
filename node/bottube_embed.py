@@ -21,6 +21,7 @@ Features:
 import hashlib
 import html as html_lib
 import json
+import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
@@ -29,6 +30,9 @@ from flask import Blueprint, request, Response, jsonify, render_template_string,
 
 # Create blueprint for embed routes
 embed_bp = Blueprint("bottube_embed", __name__, url_prefix="/")
+
+# Bottube video database path — set by init_embed_routes()
+_BOT_DB_PATH = "/root/rustchain/rustchain_v2.db"
 
 
 # ============================================================================
@@ -705,53 +709,77 @@ WATCH_PAGE_TEMPLATE = """
 # Helper Functions
 # ============================================================================
 
-def _get_mock_video(video_id: str) -> Optional[Dict[str, Any]]:
-    """Get mock video data for demonstration."""
-    base_time = time.time()
-    
-    mock_videos = {
-        "demo-001": {
-            "id": "demo-001",
-            "title": "Introduction to RustChain Mining",
-            "description": "Learn how to set up and optimize your RustChain mining operation for maximum efficiency.",
-            "agent": "rustchain-bot",
-            "created_at": base_time - 3600,
-            "thumbnail_url": "https://bottube.ai/thumbnails/demo-001.jpg",
-            "video_url": "https://bottube.ai/videos/demo-001.mp4",
-            "duration": 180,
-            "views": 1250,
-            "tags": ["mining", "tutorial", "rustchain"],
-            "public": True,
-        },
-        "demo-002": {
-            "id": "demo-002",
-            "title": "Understanding RIP-200 Epoch Rewards",
-            "description": "Deep dive into the RIP-200 epoch rewards system and how miners can maximize their earnings.",
-            "agent": "edu-agent",
-            "created_at": base_time - 7200,
-            "thumbnail_url": "https://bottube.ai/thumbnails/demo-002.jpg",
-            "video_url": "https://bottube.ai/videos/demo-002.mp4",
-            "duration": 420,
-            "views": 890,
-            "tags": ["rewards", "epoch", "rip-200"],
-            "public": True,
-        },
-        "demo-003": {
-            "id": "demo-003",
-            "title": "Hardware Binding v2.0 Explained",
-            "description": "Complete guide to the new hardware binding system with anti-spoof protection.",
-            "agent": "tech-agent",
-            "created_at": base_time - 14400,
-            "thumbnail_url": "https://bottube.ai/thumbnails/demo-003.jpg",
-            "video_url": "https://bottube.ai/videos/demo-003.mp4",
-            "duration": 300,
-            "views": 2100,
-            "tags": ["hardware", "security", "binding"],
-            "public": True,
-        },
-    }
-    
-    return mock_videos.get(video_id)
+def _ensure_video_db():
+    """Create bottube_videos table if it doesn't exist."""
+    with sqlite3.connect(_BOT_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bottube_videos (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                agent TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                thumbnail_url TEXT DEFAULT '',
+                video_url TEXT DEFAULT '',
+                duration INTEGER DEFAULT 0,
+                views INTEGER DEFAULT 0,
+                tags TEXT DEFAULT '[]',
+                public INTEGER DEFAULT 1
+            )
+        """)
+        conn.commit()
+
+
+def _seed_demo_videos():
+    """Seed demo videos on first run if table is empty."""
+    with sqlite3.connect(_BOT_DB_PATH) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM bottube_videos").fetchone()[0]
+        if count > 0:
+            return
+
+        base_time = time.time()
+        demos = [
+            ("demo-001", "Introduction to RustChain Mining",
+             "Learn how to set up and optimize your RustChain mining operation for maximum efficiency.",
+             "rustchain-bot", base_time - 3600, 180, 1250, ["mining", "tutorial", "rustchain"]),
+            ("demo-002", "Understanding RIP-200 Epoch Rewards",
+             "Deep dive into the RIP-200 epoch rewards system and how miners can maximize their earnings.",
+             "edu-agent", base_time - 7200, 420, 890, ["rewards", "epoch", "rip-200"]),
+            ("demo-003", "Hardware Binding v2.0 Explained",
+             "Complete guide to the new hardware binding system with anti-spoof protection.",
+             "tech-agent", base_time - 14400, 300, 2100, ["hardware", "security", "binding"]),
+        ]
+        for vid_id, title, desc, agent, created, duration, views, tags in demos:
+            conn.execute(
+                "INSERT OR IGNORE INTO bottube_videos(id, title, description, agent, created_at, duration, views, tags) VALUES (?,?,?,?,?,?,?,?)",
+                (vid_id, title, desc, agent, created, duration, views, json.dumps(tags))
+            )
+        conn.commit()
+
+
+def _get_video(video_id: str) -> Optional[Dict[str, Any]]:
+    """Get video data from database."""
+    _ensure_video_db()
+    _seed_demo_videos()
+
+    with sqlite3.connect(_BOT_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM bottube_videos WHERE id = ?", (video_id,)
+        ).fetchone()
+
+    if not row:
+        return None
+
+    video = dict(row)
+    # Parse tags from JSON string
+    if isinstance(video.get("tags"), str):
+        try:
+            video["tags"] = json.loads(video["tags"])
+        except (json.JSONDecodeError, TypeError):
+            video["tags"] = []
+    video["public"] = bool(video.get("public", 1))
+    return video
 
 
 def _get_related_videos(video_id: str, limit: int = 5) -> List[Dict[str, Any]]:
@@ -819,7 +847,7 @@ def embed_player(video_id: str):
     if len(video_id) > 256:
         return Response("<html><body><h1>Invalid video ID</h1></body></html>", status=400, mimetype="text/html")
     # Get video data
-    video = _get_mock_video(video_id)
+    video = _get_video(video_id)
 
     if not video:
         error_html = """
@@ -888,7 +916,7 @@ def oembed():
         }), 400
     
     # Get video data
-    video = _get_mock_video(video_id)
+    video = _get_video(video_id)
     
     if not video:
         return jsonify({
@@ -962,7 +990,7 @@ def watch_page(video_id: str):
     if len(video_id) > 256:
         return Response("<html><body><h1>Invalid video ID</h1></body></html>", status=400, mimetype="text/html")
     # Get video data
-    video = _get_mock_video(video_id)
+    video = _get_video(video_id)
 
     if not video:
         error_html = """
