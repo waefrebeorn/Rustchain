@@ -20,6 +20,7 @@ Usage:
     python rustchain_cli.py agent info <agent_id>
     python rustchain_cli.py wallet create <name>
     python rustchain_cli.py wallet balance <address>
+    python rustchain_cli.py wallet list
     python rustchain_cli.py bounty list
     python rustchain_cli.py bounty claim <bounty_id>
     python rustchain_cli.py x402 pay <recipient> <amount>
@@ -260,39 +261,74 @@ def cmd_wallet(args):
             print("Error: Please provide a wallet name", file=sys.stderr)
             sys.exit(1)
 
-        # Wallet creation requires server interaction - not implemented in CLI-only mode
-        if not dry_run:
-            print("Error: Wallet creation requires a running RustChain node.", file=sys.stderr)
-            print("This CLI is read-only. Use --dry-run for local simulation only.", file=sys.stderr)
-            print("SIMULATION ONLY: No server call will be made.", file=sys.stderr)
-            return 1
+        # Generate real Ed25519 keypair locally
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.hazmat.primitives import serialization
 
-        # Generate wallet address from name + timestamp (SIMULATION ONLY)
-        timestamp = str(int(datetime.now().timestamp()))
-        wallet_id = hashlib.sha256(f"{args.name}:{timestamp}".encode()).hexdigest()[:16]
-        address = f"rtc_{args.name.lower().replace(' ', '_')}_{wallet_id}"
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+
+        # Serialize private key for storage
+        private_bytes = private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        public_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+
+        # Derive address from public key (first 20 bytes as hex)
+        address = "rtc1" + public_bytes[:20].hex()
+
+        wallet_dir = os.path.expanduser("~/.rustchain")
+        os.makedirs(wallet_dir, exist_ok=True)
+        wallet_file = os.path.join(wallet_dir, "wallets.json")
+
+        # Load existing wallets
+        wallets = {}
+        if os.path.exists(wallet_file):
+            try:
+                with open(wallet_file) as f:
+                    wallets = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
 
         wallet_data = {
             "name": args.name,
             "address": address,
+            "private_key_hex": private_bytes.hex(),
+            "public_key_hex": public_bytes.hex(),
             "created_at": datetime.now().isoformat(),
             "type": "agent" if args.agent else "user",
-            "balance_rtc": 0,
-            "x402_enabled": True,
-            "_simulation_only": True
+            "balance_rtc": 0
         }
+        wallets[args.name] = wallet_data
+
+        with open(wallet_file, "w") as f:
+            json.dump(wallets, f, indent=2)
 
         if use_json:
-            print(json.dumps(wallet_data, indent=2))
+            print(json.dumps({
+                "name": args.name,
+                "address": address,
+                "public_key": public_bytes.hex(),
+                "created_at": wallet_data["created_at"],
+                "type": wallet_data["type"],
+                "stored_at": wallet_file
+            }, indent=2))
         else:
-            print("=== SIMULATION ONLY - NO SERVER CALL MADE ===")
-            print(f"Name:      {wallet_data['name']}")
-            print(f"Address:   {wallet_data['address']}")
+            print("=== Wallet Created ===")
+            print(f"Name:      {args.name}")
+            print(f"Address:   {address}")
             print(f"Type:      {wallet_data['type'].title()}")
             print(f"Created:   {wallet_data['created_at']}")
-            print(f"X402:      {'Enabled' if wallet_data['x402_enabled'] else 'Disabled'}")
-            print("\n⚠️  SIMULATION ONLY: This wallet was NOT created on the server.")
-            print("⚠️  Save this address! It cannot be recovered.")
+            print(f"Stored:    {wallet_file}")
+            print()
+            print("⚠️  WARNING: Private key saved to local file only.")
+            print("⚠️  Backup ~/.rustchain/wallets.json to avoid losing access.")
+            print("⚠️  Use 'rustchain_cli.py wallet list' to view all wallets.")
 
         return 0
     
@@ -318,23 +354,63 @@ def cmd_wallet(args):
         return
     
     elif args.action == "list":
-        data = fetch_api("/api/wallets")
-        
+        # Show local wallets from ~/.rustchain/wallets.json
+        wallet_file = os.path.join(os.path.expanduser("~/.rustchain"), "wallets.json")
+        local_wallets = []
+        if os.path.exists(wallet_file):
+            try:
+                with open(wallet_file) as f:
+                    wallets_data = json.load(f)
+                    local_wallets = [
+                        {
+                            "name": name,
+                            "address": w.get("address", ""),
+                            "type": w.get("type", "user"),
+                            "created_at": w.get("created_at", "")
+                        }
+                        for name, w in wallets_data.items()
+                    ]
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Also fetch from server for balance info
+        try:
+            data = fetch_api("/api/wallets")
+        except RustChainAPIError:
+            data = []
+
         if use_json:
-            print(json.dumps(data, indent=2))
+            print(json.dumps({"local": local_wallets, "server": data}, indent=2))
             return
-        
-        headers = ["Address", "Type", "Balance (RTC)", "X402"]
-        rows = []
-        for wallet in data[:20]:
-            address = wallet.get('address', 'N/A')[:24]
-            wtype = wallet.get('type', 'user').title()
-            balance = f"{wallet.get('balance_rtc', 0):.2f}"
-            x402 = "✓" if wallet.get('x402_enabled') else "✗"
-            rows.append([address, wtype, balance, x402])
-        
-        print(f"Wallets ({len(data)} total, showing 20)\n")
-        print(format_table(headers, rows))
+
+        if local_wallets:
+            print("=== Local Wallets ===\n")
+            headers = ["Name", "Address", "Type", "Created"]
+            rows = []
+            for w in local_wallets:
+                rows.append([
+                    w["name"],
+                    w["address"][:24],
+                    w["type"].title(),
+                    w["created_at"][:10] if w["created_at"] else "N/A"
+                ])
+            print(format_table(headers, rows))
+            print()
+
+        if data:
+            print("=== Server Wallets (first 20) ===\n")
+            headers = ["Address", "Type", "Balance (RTC)", "X402"]
+            rows = []
+            for wallet in data[:20]:
+                address = wallet.get('address', 'N/A')[:24]
+                wtype = wallet.get('type', 'user').title()
+                balance = f"{wallet.get('balance_rtc', 0):.2f}"
+                x402 = "✓" if wallet.get('x402_enabled') else "✗"
+                rows.append([address, wtype, balance, x402])
+            print(f"Wallets ({len(data)} total, showing 20)\n")
+            print(format_table(headers, rows))
+        else:
+            print("No wallets found on server. Use 'wallet create' to generate a local wallet.")
         return
     
     parser = argparse.ArgumentParser(prog="rustchain-cli wallet")
