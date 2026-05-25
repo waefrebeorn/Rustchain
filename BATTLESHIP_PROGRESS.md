@@ -183,6 +183,6 @@
 - **Row H** — Economic — expandable
 - **Row I** — Cross-repo — expandable
 
-**56 cells vaulted. ~360 fresh gaps to hunt.**
+**89 cells vaulted. ~311 fresh gaps to hunt.**
 
 Pick lowest undone coordinate by row priority: S → M → D → E → T
