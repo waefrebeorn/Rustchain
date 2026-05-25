@@ -406,37 +406,82 @@ def cmd_agent(args):
             print("Error: Please provide a wallet address or set RUSTCHAIN_WALLET", file=sys.stderr)
             sys.exit(1)
 
-        # Agent registration requires server interaction - not implemented in CLI-only mode
-        if not dry_run:
-            print("Error: Agent registration requires a running RustChain node.", file=sys.stderr)
-            print("This CLI is read-only. Use --dry-run for local simulation only.", file=sys.stderr)
-            print("SIMULATION ONLY: No server call will be made.", file=sys.stderr)
-            return 1
+        # Generate real agent keypair
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.hazmat.primitives import serialization
 
-        # Simulate agent registration (SIMULATION ONLY)
-        agent_id = hashlib.sha256(f"{args.name}:{wallet}".encode()).hexdigest()[:16]
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        public_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+
+        agent_id = "agent_" + public_bytes[:16].hex()
+        agent_dir = os.path.expanduser("~/.rustchain/agents")
+        os.makedirs(agent_dir, exist_ok=True)
+        agent_file = os.path.join(agent_dir, f"{args.name}.json")
+
+        # Load existing registrations
+        agents = {}
+        reg_file = os.path.join(agent_dir, "registry.json")
+        if os.path.exists(reg_file):
+            try:
+                with open(reg_file) as f:
+                    agents = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
         agent_data = {
-            "agent_id": f"agent_{agent_id}",
+            "agent_id": agent_id,
             "name": args.name,
             "owner_wallet": wallet,
             "type": args.type or "service",
             "registered_at": datetime.now().isoformat(),
-            "x402_enabled": True,
-            "status": "active",
-            "_simulation_only": True
+            "public_key_hex": public_bytes.hex(),
+            "status": "active"
         }
+        agents[args.name] = agent_data
+
+        with open(reg_file, "w") as f:
+            json.dump(agents, f, indent=2)
+
+        # Also try to register with node if available
+        try:
+            node_url = get_node_url()
+            from urllib.request import Request
+            req = Request(
+                f"{node_url}/beacon/atlas/register",
+                data=json.dumps({
+                    "agent_id": agent_id,
+                    "name": args.name,
+                    "owner_wallet": wallet,
+                    "type": args.type or "service",
+                    "public_key": public_bytes.hex()
+                }).encode(),
+                headers={"Content-Type": "application/json", "User-Agent": "RustChain-CLI/0.1"}
+            )
+            with urlopen(req, timeout=5):
+                agent_data["node_registered"] = True
+        except Exception:
+            agent_data["node_registered"] = False
 
         if use_json:
-            print(json.dumps(agent_data, indent=2))
+            payload = {k: v for k, v in agent_data.items() if k != "public_key_hex"}
+            payload["stored_at"] = reg_file
+            print(json.dumps(payload, indent=2))
         else:
-            print("=== SIMULATION ONLY - NO SERVER CALL MADE ===")
+            print("=== Agent Registered ===")
             print(f"Agent ID:   {agent_data['agent_id']}")
             print(f"Name:       {agent_data['name']}")
             print(f"Owner:      {agent_data['owner_wallet']}")
             print(f"Type:       {agent_data['type'].title()}")
             print(f"Status:     {agent_data['status'].title()}")
-            print(f"\n⚠️  SIMULATION ONLY: This agent was NOT registered on the server.")
-        return 0
+            print(f"Stored:     {reg_file}")
+            if agent_data.get("node_registered"):
+                print("Node:       ✅ Registered on network")
+            else:
+                print("Node:       ⚠️  Local only (node unreachable)")
     
     parser = argparse.ArgumentParser(prog="rustchain-cli agent")
     parser.print_help()
