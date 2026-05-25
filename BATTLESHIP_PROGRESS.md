@@ -88,16 +88,16 @@
 | S18 | bridge_api.py | no rate limiting on any endpoint → per-IP sliding window | MED | ✅ #6292 |
 | S19 | beacon_api.py | no rate limiting → 8 endpoints per-IP rate-limited | MED | ✅ #4 |
 | S20 | airdrop_v2.py | no rate limiting → 5 endpoints per-IP rate-limited | MED | ✅ #5 |
-| S21 | governance.py | mock erc20/ed25519 config reference | MED |
-| S22 | bottube_feed_routes.py | feed routes have no auth — anyone can spam | MED |
-| S23 | bridge_api.py:225 | chain address validation is format-only, no checksum | MED |
-| S24 | beacon_x402.py | x402 payment flow not fully wired | MED |
+| S21 | governance.py | mock erc20/ed25519 config reference | MED | ✅ verified clean |
+| S22 | bottube_feed_routes.py | feed routes have no auth — anyone can spam | MED | ✅ #13 |
+| S23 | bridge_api.py:225 | chain address validation is format-only, no checksum | MED | ✅ #14 |
+| S24 | beacon_x402.py | x402 payment flow not fully wired | MED | ✅ #15 |
 | S25 | utxo_endpoints.py:493 | new-client fee signed but drift/expiry not checked | LOW |
 | S26 | rustchain_p2p_gossip.py:93 | insecure placeholder p2p secret config | HIGH | ✅ #10 |
 | S27 | hardware_fingerprint_replay.py | fingerprint replay DB has no cleanup cron | LOW |
 | S28 | anti_double_mining.py | anti-double-mining table no index on miner+block | LOW |
-| S29 | machine_passport_api.py | photo_hash not verified client-side | MED |
-| S30 | payout_worker.py:285 | recover_orphans flags but no auto-refund path | MED |
+| S29 | machine_passport_api.py | photo_hash not verified client-side | MED | ✅ #16 |
+| S30 | payout_worker.py:285 | recover_orphans flags but no auto-refund path | MED | ✅ #17 |
 
 ### Row M — Missing Error Handling (M1-M30)
 
