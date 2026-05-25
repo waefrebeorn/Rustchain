@@ -31,10 +31,10 @@ class SubmissionValidator:
         self.warnings: list = []
     
     def validate_photo(self, photo_path: str) -> Dict[str, Any]:
-        """Validate photo evidence"""
+        """Validate photo evidence using image analysis"""
         result = {
-            "status": "SKIP",
-            "message": "Photo validation requires image processing (not implemented)",
+            "status": "PASS",
+            "message": "",
             "checks": {}
         }
         
@@ -53,34 +53,83 @@ class SubmissionValidator:
         
         # Check file extension
         ext = os.path.splitext(photo_path)[1].lower()
-        if ext not in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+        if ext not in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
             warning_messages.append(f"Unusual photo format: {ext}")
             self.warnings.append(f"Unusual photo format: {ext}")
         
-        # In production, would check:
-        # - EXIF timestamp
-        # - Image content (machine + monitor)
-        # - Metadata consistency
+        result["checks"]["file_exists"] = True
+        result["checks"]["file_size_bytes"] = file_size
+        result["checks"]["format"] = ext
+        
+        # Verify image integrity and extract metadata using Pillow
+        try:
+            from PIL import Image, ExifTags
+            img = Image.open(photo_path)
+            img.verify()  # verifies it's a valid image without decoding pixels
+            
+            # Re-open after verify (verify may close)
+            img = Image.open(photo_path)
+            width, height = img.size
+            result["checks"]["width"] = width
+            result["checks"]["height"] = height
+            result["checks"]["mode"] = img.mode
+            
+            # Check minimum resolution for a usable photo
+            if width < 300 or height < 200:
+                warning_messages.append(
+                    f"Photo resolution too small: {width}x{height} (min 300x200)"
+                )
+                self.warnings.append(f"Photo resolution too small: {width}x{height}")
+            
+            # Check if it's a real photograph (not palette-based or bitmap)
+            suspicious_modes = {'P', '1'}  # palette/indexed or bilevel — rare for photos
+            if img.mode in suspicious_modes:
+                warning_messages.append(
+                    f"Unusual color mode for photo: {img.mode} (expected RGB/CMYK)"
+                )
+                self.warnings.append(f"Unusual photo color mode: {img.mode}")
+            
+            # Extract EXIF metadata for timestamp verification
+            exif_data = img.getexif() or None
+            if exif_data:
+                timestamp_tag = None
+                camera_tag = None
+                for tag_id, tag_name in ExifTags.TAGS.items():
+                    if tag_name == "DateTimeOriginal":
+                        timestamp_tag = tag_id
+                    elif tag_name == "Model":
+                        camera_tag = tag_id
+                
+                if timestamp_tag and timestamp_tag in exif_data:
+                    result["checks"]["exif_timestamp"] = str(exif_data[timestamp_tag])
+                if camera_tag and camera_tag in exif_data:
+                    result["checks"]["camera_model"] = str(exif_data[camera_tag])
+                
+                result["checks"]["has_exif"] = True
+            else:
+                result["checks"]["has_exif"] = False
+                warning_messages.append("No EXIF metadata found (photo may be re-encoded)")
+                self.warnings.append("No EXIF metadata")
+        
+        except Exception as e:
+            result["status"] = "FAIL"
+            result["message"] = f"Photo validation error: {e}"
+            self.errors.append(f"Photo decode failed: {e}")
+            return result
         
         if warning_messages:
             result["status"] = "WARN"
             result["message"] = "; ".join(warning_messages)
         else:
-            result["status"] = "PASS"
-            result["message"] = "Photo file exists and appears valid"
-        result["checks"] = {
-            "file_exists": True,
-            "file_size_bytes": file_size,
-            "format": ext
-        }
+            result["message"] = "Photo is valid with real image content"
         
         return result
     
     def validate_screenshot(self, screenshot_path: str) -> Dict[str, Any]:
-        """Validate miner output screenshot"""
+        """Validate miner output screenshot using image analysis"""
         result = {
-            "status": "SKIP",
-            "message": "Screenshot validation requires image processing (not implemented)",
+            "status": "PASS",
+            "message": "",
             "checks": {}
         }
         
@@ -89,20 +138,65 @@ class SubmissionValidator:
             result["message"] = f"Screenshot file not found: {screenshot_path}"
             return result
         
+        warning_messages = []
+
         # Check file size
         file_size = os.path.getsize(screenshot_path)
         if file_size < 1000:  # Less than 1KB
-            result["status"] = "WARN"
-            result["message"] = f"Screenshot file seems too small: {file_size} bytes"
+            warning_messages.append(f"Screenshot file seems too small: {file_size} bytes")
             self.warnings.append("Screenshot file is unusually small")
-        else:
-            result["status"] = "PASS"
-            result["message"] = "Screenshot file exists"
         
-        result["checks"] = {
-            "file_exists": True,
-            "file_size_bytes": file_size
-        }
+        result["checks"]["file_exists"] = True
+        result["checks"]["file_size_bytes"] = file_size
+        
+        # Verify image integrity and check dimensions using Pillow
+        try:
+            from PIL import Image
+            img = Image.open(screenshot_path)
+            img.verify()
+            
+            img = Image.open(screenshot_path)
+            width, height = img.size
+            result["checks"]["width"] = width
+            result["checks"]["height"] = height
+            result["checks"]["aspect_ratio"] = f"{width/height:.2f}"
+            result["checks"]["mode"] = img.mode
+            
+            # Screenshots should be at least a reasonable terminal size
+            if width < 320 or height < 200:
+                warning_messages.append(
+                    f"Screenshot resolution too small: {width}x{height} (min 320x200)"
+                )
+                self.warnings.append(f"Screenshot resolution too small: {width}x{height}")
+            
+            # Check for common screenshot aspect ratios (16:9, 16:10, 4:3)
+            aspect = width / height
+            is_standard_screen = any(
+                abs(aspect - ar) < 0.05
+                for ar in [1.33, 1.25, 1.60, 1.78, 1.77, 1.5, 1.6]
+            )
+            if not is_standard_screen:
+                warning_messages.append(
+                    f"Unusual aspect ratio: {aspect:.2f} (expected ~1.33, 1.6, or 1.78 for screenshots)"
+                )
+                self.warnings.append(f"Unusual screenshot aspect ratio: {aspect:.2f}")
+            
+            # Suspicious modes for screenshots
+            if img.mode == '1':  # bilevel — too low quality for a real screenshot
+                warning_messages.append("Bilevel (1-bit) image is unlikely to be a real screenshot")
+                self.warnings.append("Screenshot is 1-bit — possible placeholder")
+        
+        except Exception as e:
+            result["status"] = "FAIL"
+            result["message"] = f"Screenshot validation error: {e}"
+            self.errors.append(f"Screenshot decode failed: {e}")
+            return result
+        
+        if warning_messages:
+            result["status"] = "WARN"
+            result["message"] = "; ".join(warning_messages)
+        else:
+            result["message"] = "Screenshot is valid with real image content"
         
         return result
     
