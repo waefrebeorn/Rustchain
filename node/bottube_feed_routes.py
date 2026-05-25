@@ -16,6 +16,7 @@ Query Parameters:
     cursor  - Pagination cursor (optional)
 """
 
+import json
 import time
 from typing import Dict, Any, List, Optional, Tuple
 from flask import Blueprint, request, Response, jsonify, current_app
@@ -66,6 +67,31 @@ def _get_db_connection():
     return conn
 
 
+def _decode_cursor(cursor: Optional[str]) -> Tuple[Optional[float], Optional[str]]:
+    """Decode pagination cursor into (created_at, id).
+    
+    Cursor format: base64-encoded JSON [created_at, id]
+    Returns (None, None) for empty/no cursor.
+    """
+    if not cursor:
+        return None, None
+    try:
+        import base64
+        decoded = base64.b64decode(cursor).decode()
+        parts = json.loads(decoded)
+        return float(parts[0]), str(parts[1])
+    except (Exception, json.JSONDecodeError, IndexError, ValueError):
+        return None, None
+
+
+def _encode_cursor(created_at: float, video_id: str) -> str:
+    """Encode (created_at, video_id) into pagination cursor string."""
+    import base64
+    return base64.b64encode(
+        json.dumps([created_at, video_id]).encode()
+    ).decode()
+
+
 def _fetch_videos(
     limit: int = 20,
     agent: Optional[str] = None,
@@ -73,17 +99,21 @@ def _fetch_videos(
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
     Fetch videos from database or mock data.
-    
+
     Args:
         limit: Maximum number of videos (must be >= 1)
         agent: Filter by agent ID
-        cursor: Pagination cursor (not implemented in mock)
-        
+        cursor: Pagination cursor — decodes to (created_at, id) for keyset pagination
+
     Returns:
         Tuple of (videos list, next cursor or None)
     """
     if limit < 1:
         raise ValueError(f"limit must be >= 1, got {limit}")
+    
+    cursor_created_at, cursor_id = _decode_cursor(cursor)
+    overfetch = limit + 1  # fetch one extra to detect if there's a next page
+    
     # Try to fetch from database
     conn = _get_db_connection()
     
@@ -97,9 +127,9 @@ def _fetch_videos(
             )
             if not cursor_obj.fetchone():
                 conn.close()
-                return _get_mock_videos(limit, agent), None
+                return _get_mock_videos(limit, agent, cursor_created_at, cursor_id), None
             
-            # Build query
+            # Build keyset pagination query
             query = "SELECT * FROM bottube_videos WHERE public = 1"
             params = []
             
@@ -107,8 +137,13 @@ def _fetch_videos(
                 query += " AND agent = ?"
                 params.append(agent)
             
-            query += " ORDER BY created_at DESC LIMIT ?"
-            params.append(limit)
+            if cursor_created_at is not None and cursor_id is not None:
+                # Keyset pagination: created_at DESC, id DESC
+                query += " AND (created_at < ? OR (created_at = ? AND id < ?))"
+                params.extend([cursor_created_at, cursor_created_at, cursor_id])
+            
+            query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+            params.append(overfetch)
             
             cursor_obj.execute(query, params)
             rows = cursor_obj.fetchall()
@@ -117,12 +152,20 @@ def _fetch_videos(
             videos = []
             for row in rows:
                 video = dict(row)
-                # Normalize field names
                 if "id" not in video and "video_id" in video:
                     video["id"] = video["video_id"]
                 videos.append(video)
             
-            return videos, None
+            # Check if there are more results
+            has_more = len(videos) > limit
+            if has_more:
+                videos = videos[:limit]
+                last = videos[-1]
+                next_cursor = _encode_cursor(last.get("created_at", 0), last.get("id", ""))
+            else:
+                next_cursor = None
+            
+            return videos, next_cursor
             
         except Exception as e:
             current_app.logger.error(f"Error fetching videos: {e}")
@@ -132,10 +175,12 @@ def _fetch_videos(
                 pass
     
     # Fallback to mock data
-    return _get_mock_videos(limit, agent), None
+    return _get_mock_videos(limit, agent, cursor_created_at, cursor_id), None
 
 
-def _get_mock_videos(limit: int = 20, agent: Optional[str] = None) -> List[Dict[str, Any]]:
+def _get_mock_videos(limit: int = 20, agent: Optional[str] = None,
+                     cursor_created_at: Optional[float] = None,
+                     cursor_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Generate mock video data for demonstration."""
     base_time = time.time()
     
