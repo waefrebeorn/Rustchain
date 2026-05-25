@@ -17,6 +17,7 @@ Query Parameters:
 """
 
 import time
+from collections import defaultdict, deque
 from typing import Dict, Any, List, Optional, Tuple
 from flask import Blueprint, request, Response, jsonify, current_app
 
@@ -30,6 +31,31 @@ from bottube_feed import (
 
 # Create blueprint for feed routes
 feed_bp = Blueprint("bottube_feed", __name__, url_prefix="/api/feed")
+
+# Per-IP rate limiter: 60 requests/min for feed endpoints
+_feeds_rate_limit: Dict[str, deque] = defaultdict(lambda: deque(maxlen=60))
+_FEEDS_RATE_WINDOW = 60  # seconds
+_FEEDS_RATE_MAX = 60     # requests per window
+
+
+def _check_feed_rate_limit() -> Optional[Response]:
+    """Check per-IP rate limit. Returns 429 response if exceeded."""
+    ip = request.remote_addr or "unknown"
+    now = time.time()
+    window = _feeds_rate_limit[ip]
+    
+    while window and window[0] < now - _FEEDS_RATE_WINDOW:
+        window.popleft()
+    
+    if len(window) >= _FEEDS_RATE_MAX:
+        retry_after = int(window[0] + _FEEDS_RATE_WINDOW - now)
+        resp = jsonify({"error": "rate_limit", "message": f"Too many requests. Retry after {retry_after}s"})
+        resp.status_code = 429
+        resp.headers["Retry-After"] = str(retry_after)
+        return resp
+    
+    window.append(now)
+    return None
 
 
 def _get_base_url() -> str:
@@ -231,6 +257,9 @@ def rss_feed():
     Returns:
         RSS 2.0 XML feed with Content-Type: application/rss+xml
     """
+    rate_check = _check_feed_rate_limit()
+    if rate_check:
+        return rate_check
     try:
         # Parse parameters
         limit = _parse_feed_limit()
@@ -285,6 +314,9 @@ def atom_feed():
     Returns:
         Atom 1.0 XML feed with Content-Type: application/atom+xml
     """
+    rate_check = _check_feed_rate_limit()
+    if rate_check:
+        return rate_check
     try:
         # Parse parameters
         limit = _parse_feed_limit()
@@ -345,6 +377,9 @@ def feed_index():
         agent  - Filter by agent ID
         cursor - Pagination cursor
     """
+    rate_check = _check_feed_rate_limit()
+    if rate_check:
+        return rate_check
     accept_header = request.headers.get("Accept", "")
     
     # Parse parameters
