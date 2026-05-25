@@ -88,7 +88,7 @@
 | S18 | bridge_api.py | no rate limiting on any endpoint → per-IP sliding window | MED | ✅ #6292 |
 | S19 | beacon_api.py | no rate limiting → 8 endpoints per-IP rate-limited | MED | ✅ #4 |
 | S20 | airdrop_v2.py | no rate limiting → 5 endpoints per-IP rate-limited | MED | ✅ #5 |
-| S21 | governance.py | mock erc20/ed25519 config reference | MED |
+|| S21 | governance.py | mock erc20/ed25519 config reference | MED | ✅ verified clean |
 | S22 | bottube_feed_routes.py | feed routes have no auth → per-IP rate limiting added | MED | ✅ #13 |
 | S23 | bridge_api.py:225 | chain address validation is format-only, no checksum | MED | ✅ #14 |
 | S24 | beacon_x402.py | x402 payment flow not fully wired | MED | ✅ #15 |
