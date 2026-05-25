@@ -105,7 +105,7 @@
 |------|-----|
 | M1 | bridge_api.py: create_bridge_transfer no timeout on external network calls |
 | M2 | beacon_api.py: create_contract no validation on JSON fields |
-| M3 | bottube_embed.py: _fetch_videos no timeout on DB queries |
+|| M3 | bottube_embed.py: _fetch_videos no timeout on DB queries | ✅ #17 |
 | M4 | governance.py: propose() no fee validation |
 | M5 | coalition.py: no quorum check on vote tally |
 | M6 | payout_worker.py: cleanup_old_withdrawals file descriptor leak on archive |
@@ -115,10 +115,10 @@
 | M10 | beacon_x402.py: no refund path for failed x402 payments |
 | M11 | lock_ledger.py: auto_release_expired_locks no per-lock timeout cap |
 | M12 | bridge_api.py: void_bridge_transfer no 2FA for admin |
-| M13 | beacon_api.py: no pagination limit on get_agents() |
+|| M13 | beacon_api.py: no pagination limit on get_agents() | ✅ #17 |
 | M14 | governance.py: results() no cached results for repeated queries |
 | M15 | coalition.py: join() no minimum stake validation |
-| M16 | faucet.py: claim() no IP-based rate limit |
+|| M16 | faucet.py: claim() no IP-based rate limit | ✅ verified functional |
 | M17 | hall_of_rust.py: submit() no uniqueness check on hardware fingerprint |
 | M18 | bottube_feed_routes.py: rss_feed() no cache header for mock data |
 | M19 | machine_passport_api.py: no batch query endpoint |
@@ -183,6 +183,6 @@
 - **Row H** — Economic — expandable
 - **Row I** — Cross-repo — expandable
 
-**94 cells vaulted. ~306 fresh gaps to hunt.**
+**95 cells vaulted. ~305 fresh gaps to hunt.**
 
 Pick lowest undone coordinate by row priority: S → M → D → E → T

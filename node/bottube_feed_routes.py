@@ -61,7 +61,7 @@ def _get_db_connection():
         return None
     
     import sqlite3
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=5.0)  # 5s timeout prevents indefinite blocking
     conn.row_factory = sqlite3.Row
     return conn
 

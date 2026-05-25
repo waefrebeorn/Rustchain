@@ -276,11 +276,15 @@ def _authenticate_contract_agent(db, allowed_agents, body_bytes):
 
 @beacon_api.route('/api/agents', methods=['GET'])
 def get_agents():
-    """Get all registered agents."""
+    """Get all registered agents with pagination."""
     try:
         db = get_db()
+        limit = min(int(request.args.get('limit', 100)), 500)
+        offset = max(int(request.args.get('offset', 0)), 0)
         rows = db.execute(
-            "SELECT agent_id, pubkey_hex, name, status, created_at, updated_at FROM relay_agents ORDER BY created_at DESC"
+            "SELECT agent_id, pubkey_hex, name, status, created_at, updated_at "
+            "FROM relay_agents ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
         ).fetchall()
 
         agents = []
@@ -294,7 +298,7 @@ def get_agents():
                 'updated_at': row['updated_at'],
             })
 
-        return jsonify(agents)
+        return jsonify({'agents': agents, 'limit': limit, 'offset': offset})
     except Exception as e:
         return jsonify({'error': 'internal_error'}), 500
 
