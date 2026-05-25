@@ -9,8 +9,10 @@ Issue: #2309
 """
 
 import os
+import re
 import time
 import hmac
+import hashlib
 from typing import Optional
 from flask import Blueprint, request, jsonify
 
@@ -21,6 +23,40 @@ from machine_passport import (
     generate_qr_code,
     generate_passport_pdf,
 )
+
+# SHA-256 hex hash pattern — exactly 64 lowercase hex chars
+_SHA256_HEX_RE = re.compile(r'^[0-9a-f]{64}$')
+
+# Optional: URL pattern for photo_url validation
+_URL_RE = re.compile(r'^https?://[^\s/$.?#].[^\s]*$', re.IGNORECASE)
+
+
+def validate_photo_hash(photo_hash: str) -> Optional[str]:
+    """Validate a photo_hash value.
+
+    Returns an error message string if invalid, or None if valid.
+    Must be a SHA-256 hex digest (64 lowercase hex characters).
+    """
+    if not photo_hash:
+        return None  # None/empty is allowed (field is optional)
+    if not _SHA256_HEX_RE.match(photo_hash):
+        return "photo_hash must be a SHA-256 hex digest (64 lowercase hex characters)"
+    return None
+
+
+def validate_photo_url(photo_url: str) -> Optional[str]:
+    """Validate a photo_url value.
+
+    Returns an error message string if invalid, or None if valid.
+    Must be a valid HTTP(S) URL.
+    """
+    if not photo_url:
+        return None
+    if not _URL_RE.match(photo_url):
+        return "photo_url must be a valid HTTP or HTTPS URL"
+    if len(photo_url) > 2048:
+        return "photo_url must not exceed 2048 characters"
+    return None
 
 # Create blueprint
 machine_passport_bp = Blueprint('machine_passport', __name__, url_prefix='/api/machine-passport')
@@ -291,6 +327,18 @@ def create_passport():
     photo_hash = (data.get('photo_hash') or '')[:128] if data.get('photo_hash') else None
     photo_url = (data.get('photo_url') or '')[:2048] if data.get('photo_url') else None
     provenance = (data.get('provenance') or '')[:1024] if data.get('provenance') else None
+
+    # Validate photo_hash — must be a valid SHA-256 hex digest
+    if photo_hash:
+        err = validate_photo_hash(photo_hash)
+        if err:
+            return jsonify({'ok': False, 'error': 'invalid_photo_hash', 'message': err}), 400
+
+    # Validate photo_url format
+    if photo_url:
+        err = validate_photo_url(photo_url)
+        if err:
+            return jsonify({'ok': False, 'error': 'invalid_photo_url', 'message': err}), 400
     
     ledger = get_ledger()
     
@@ -364,6 +412,18 @@ def update_passport(machine_id: str):
             max_len = {'machine_id': 128, 'name': 256, 'owner_miner_id': 128, 'architecture': 64,
                        'photo_hash': 128, 'photo_url': 2048, 'provenance': 1024}.get(field, 256)
             data[field] = data[field][:max_len]
+
+    # Validate photo_hash — must be a valid SHA-256 hex digest
+    if 'photo_hash' in data and data['photo_hash']:
+        err = validate_photo_hash(data['photo_hash'])
+        if err:
+            return jsonify({'ok': False, 'error': 'invalid_photo_hash', 'message': err}), 400
+
+    # Validate photo_url format
+    if 'photo_url' in data and data['photo_url']:
+        err = validate_photo_url(data['photo_url'])
+        if err:
+            return jsonify({'ok': False, 'error': 'invalid_photo_url', 'message': err}), 400
     
     success, msg = ledger.update_passport(machine_id, data)
     
