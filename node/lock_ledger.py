@@ -267,22 +267,34 @@ def release_lock(
         }
     
     try:
-        # Credit the locked amount back to the miner's available balance.
-        # This is the core fix: without this, locked funds are permanently lost.
-        cursor.execute(
-            "UPDATE balances SET amount_i64 = amount_i64 + ? WHERE miner_id = ?",
-            (amount_i64, miner_id)
-        )
-
-        # Update lock status
+        # ── Atomic status check + credit + update ────────────────────
+        # UPDATE lock_ledger with status='locked' guard so concurrent
+        # release_lock() calls cannot both pass a stale `status !=
+        # "locked"` check and double-credit the miner.  When rowcount
+        # is 0 the lock was already released by another caller.
         cursor.execute("""
             UPDATE lock_ledger
             SET status = 'released',
                 unlocked_at = ?,
                 released_by = ?,
                 release_tx_hash = ?
-            WHERE id = ?
+            WHERE id = ? AND status = 'locked'
         """, (now, released_by, release_tx_hash, lock_id))
+        
+        if cursor.rowcount == 0:
+            # Lock was already released or forfeited by a concurrent call
+            db_conn.rollback()
+            return False, {
+                "error": "Lock already released or forfeited",
+                "lock_id": lock_id,
+                "hint": "Only locked entries can be released"
+            }
+
+        # Credit the locked amount back to the miner's available balance
+        cursor.execute(
+            "UPDATE balances SET amount_i64 = amount_i64 + ? WHERE miner_id = ?",
+            (amount_i64, miner_id)
+        )
         
         db_conn.commit()
         
@@ -345,14 +357,25 @@ def forfeit_lock(
         }
     
     try:
-        # Update lock status
+        # ── Atomic status check + update ──────────────────────────
+        # UPDATE with status='locked' guard so concurrent forfeit_lock()
+        # calls cannot both pass the stale `status != "locked"` check
+        # and forfeit the same lock entry twice.
         cursor.execute("""
             UPDATE lock_ledger
             SET status = 'forfeited',
                 unlocked_at = ?,
                 released_by = ?
-            WHERE id = ?
+            WHERE id = ? AND status = 'locked'
         """, (now, forfeited_by, lock_id))
+        
+        if cursor.rowcount == 0:
+            db_conn.rollback()
+            return False, {
+                "error": "Lock already released or forfeited",
+                "lock_id": lock_id,
+                "hint": "Only locked entries can be forfeited"
+            }
         
         # Note: Forfeited assets remain in the protocol treasury
         # They are not credited back to the miner
