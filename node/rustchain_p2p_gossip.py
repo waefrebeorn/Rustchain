@@ -110,6 +110,21 @@ if not _P2P_SECRET_RAW or _P2P_SECRET_RAW.lower() in _INSECURE_DEFAULTS:
     )
 
 P2P_SECRET = _P2P_SECRET_RAW
+
+
+def _p2p_hmac(data: str) -> str:
+    """Compute HMAC-SHA256 of data using P2P_SECRET.
+    
+    Used for request authentication without transmitting the raw secret.
+    Returns hex-encoded 32-byte digest.
+    """
+    return hmac.new(
+        P2P_SECRET.encode(),
+        data.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+
 GOSSIP_TTL = 3
 SYNC_INTERVAL = 30
 MESSAGE_EXPIRY = 300  # 5 minutes
@@ -1470,7 +1485,7 @@ class GossipLayer:
             resp = requests.post(
                 f"{peer_url}/p2p/gossip",
                 json=msg.to_dict(),
-                headers={"X-P2P-Key": P2P_SECRET},
+                headers={"X-P2P-Auth": _p2p_hmac(f"POST:/p2p/gossip")},
                 timeout=30,
                 verify=TLS_VERIFY
             )
@@ -1723,10 +1738,18 @@ def register_p2p_endpoints(app, p2p_node: RustChainP2PNode):
             return True
 
     def _require_p2p_read_auth():
-        """Require the shared P2P secret for sensitive read-only sync endpoints."""
-        provided = request.headers.get("X-P2P-Key", "")
-        if not provided or not hmac.compare_digest(provided, P2P_SECRET):
-            return jsonify({"error": "unauthorized", "message": "valid X-P2P-Key required"}), 401
+        """Require HMAC-based auth for sensitive read-only sync endpoints.
+        
+        The caller sends X-P2P-Auth: HMAC-SHA256(path, P2P_SECRET).
+        This never transmits the raw secret over the wire.
+        """
+        provided = request.headers.get("X-P2P-Auth", "")
+        if not provided:
+            return jsonify({"error": "unauthorized", "message": "valid X-P2P-Auth required"}), 401
+        
+        expected = _p2p_hmac(request.path)
+        if not hmac.compare_digest(provided, expected):
+            return jsonify({"error": "unauthorized", "message": "invalid X-P2P-Auth"}), 401
         return None
 
     @app.route('/p2p/gossip', methods=['POST'])
