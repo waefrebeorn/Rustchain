@@ -83,20 +83,20 @@
 | S13 | payout_worker.py:22 | MOCK_MODE default → safe mock (False→True) | HIGH | ✅ #6290 |
 | S14 | machine_passport_viewer.py:290 | QR code is placeholder div — no real QR gen | LOW |
 | S15 | bottube_embed.py:708 | _get_mock_video() fallback → persistent DB | MED | ✅ #11 |
-| S16 | bottube_feed_routes.py:80 | pagination cursor not implemented in mock | MED |
+| S16 | bottube_feed_routes.py:80 | pagination cursor not implemented in mock | MED | ✅ #12 |
 | S17 | ed25519_config.py:27 | TESTNET_ALLOW_MOCK_SIG → env-var-driven, prevents monkey-patching | HIGH | ✅ #6291 |
 | S18 | bridge_api.py | no rate limiting on any endpoint → per-IP sliding window | MED | ✅ #6292 |
 | S19 | beacon_api.py | no rate limiting → 8 endpoints per-IP rate-limited | MED | ✅ #4 |
 | S20 | airdrop_v2.py | no rate limiting → 5 endpoints per-IP rate-limited | MED | ✅ #5 |
 | S21 | governance.py | mock erc20/ed25519 config reference | MED |
-| S22 | bottube_feed_routes.py | feed routes have no auth — anyone can spam | MED |
-| S23 | bridge_api.py:225 | chain address validation is format-only, no checksum | MED |
-| S24 | beacon_x402.py | x402 payment flow not fully wired | MED |
+| S22 | bottube_feed_routes.py | feed routes have no auth → per-IP rate limiting added | MED | ✅ #13 |
+| S23 | bridge_api.py:225 | chain address validation is format-only, no checksum | MED | ✅ #14 |
+| S24 | beacon_x402.py | x402 payment flow not fully wired | MED | ✅ #15 |
 | S25 | utxo_endpoints.py:493 | new-client fee signed but drift/expiry not checked | LOW |
 | S26 | rustchain_p2p_gossip.py:93 | insecure placeholder p2p secret config | HIGH | ✅ #10 |
 | S27 | hardware_fingerprint_replay.py | fingerprint replay DB has no cleanup cron | LOW |
 | S28 | anti_double_mining.py | anti-double-mining table no index on miner+block | LOW |
-| S29 | machine_passport_api.py | photo_hash not verified client-side | MED |
+|| S29 | machine_passport_api.py | photo_hash not verified client-side | MED | ✅ #16 |
 | S30 | payout_worker.py:285 | recover_orphans flags but no auto-refund path | MED |
 
 ### Row M — Missing Error Handling (M1-M30)
