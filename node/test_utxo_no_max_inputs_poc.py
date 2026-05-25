@@ -66,6 +66,7 @@ class TestMempoolNoMaxInputsBoundary(unittest.TestCase):
             box_ids.append(boxes[0]['box_id'])
         return box_ids
 
+    @unittest.expectedFailure
     def test_EXPECTED_FAILURE_mempool_accepts_unbounded_inputs(self):
         """
         🔴 INTENTIONALLY FAILS — proves the bug exists.
@@ -95,6 +96,7 @@ class TestMempoolNoMaxInputsBoundary(unittest.TestCase):
             "CRITICAL: mempool_add should reject excessive inputs "
             "(200 SELECT queries inside BEGIN IMMEDIATE = DoS vector)")
 
+    @unittest.expectedFailure
     def test_EXPECTED_FAILURE_mempool_dos_magnitude(self):
         """
         Measure the cost — 500-input tx to quantify the DoS surface.
