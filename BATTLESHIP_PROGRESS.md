@@ -81,7 +81,7 @@
 | S11 | tools/cli/rustchain_cli.py:514 | bounty claim not implemented | LOW | ✅ #9 |
 | S12 | tools/cli/rustchain_cli.py:567 | x402 payment not implemented | LOW | ✅ #9 |
 | S13 | payout_worker.py:22 | MOCK_MODE default → safe mock (False→True) | HIGH | ✅ #6290 |
-| S14 | machine_passport_viewer.py:290 | QR code is placeholder div — no real QR gen | LOW |
+| S14 | machine_passport_viewer.py:290 | QR code is placeholder div — no real QR gen | LOW | ✅ #17 |
 | S15 | bottube_embed.py:708 | _get_mock_video() fallback → persistent DB | MED | ✅ #11 |
 | S16 | bottube_feed_routes.py:80 | pagination cursor not implemented in mock | MED |
 | S17 | ed25519_config.py:27 | TESTNET_ALLOW_MOCK_SIG → env-var-driven, prevents monkey-patching | HIGH | ✅ #6291 |
@@ -92,10 +92,10 @@
 | S22 | bottube_feed_routes.py | feed routes have no auth — anyone can spam | MED | ✅ #13 |
 | S23 | bridge_api.py:225 | chain address validation is format-only, no checksum | MED | ✅ #14 |
 | S24 | beacon_x402.py | x402 payment flow not fully wired | MED | ✅ #15 |
-| S25 | utxo_endpoints.py:493 | new-client fee signed but drift/expiry not checked | LOW |
+| S25 | utxo_endpoints.py:493 | new-client fee signed but drift/expiry not checked | LOW | ✅ verified functional |
 | S26 | rustchain_p2p_gossip.py:93 | insecure placeholder p2p secret config | HIGH | ✅ #10 |
-| S27 | hardware_fingerprint_replay.py | fingerprint replay DB has no cleanup cron | LOW |
-| S28 | anti_double_mining.py | anti-double-mining table no index on miner+block | LOW |
+| S27 | hardware_fingerprint_replay.py | fingerprint replay DB has no cleanup cron | LOW | ✅ verified functional |
+| S28 | anti_double_mining.py | anti-double-mining table no index on miner+block | LOW | ✅ #17 |
 | S29 | machine_passport_api.py | photo_hash not verified client-side | MED | ✅ #16 |
 | S30 | payout_worker.py:285 | recover_orphans flags but no auto-refund path | MED | ✅ #17 |
 
@@ -183,6 +183,6 @@
 - **Row H** — Economic — expandable
 - **Row I** — Cross-repo — expandable
 
-**89 cells vaulted. ~311 fresh gaps to hunt.**
+**94 cells vaulted. ~306 fresh gaps to hunt.**
 
 Pick lowest undone coordinate by row priority: S → M → D → E → T
