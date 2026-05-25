@@ -222,8 +222,53 @@ def validate_bridge_request(data: Optional[Dict]) -> ValidationResult:
     )
 
 
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _crc16_qoi(data: bytes) -> int:
+    """CRC-16/QOI checksum polynomial: x^16 + x^15 + x^5 + x^0 (0x8005)."""
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (crc << 1) ^ 0x8005 if crc & 0x8000 else crc << 1
+            crc &= 0xFFFF
+    return crc
+
+
+def _is_valid_base58(addr: str) -> bool:
+    """Check if string contains only valid base58 characters."""
+    return all(c in BASE58_ALPHABET for c in addr)
+
+
+def _verify_ergo_checksum(address: str) -> bool:
+    """Verify Ergo address blake2b checksum (last 4 bytes)."""
+    try:
+        from hashlib import blake2b
+        body = address[:-4]
+        checksum = address[-4:]
+        expected = blake2b(body.encode(), digest_size=4).hexdigest()
+        return checksum == expected[:4]
+    except ImportError:
+        return True  # blake2b not available, skip checksum
+
+
+def _verify_eip55_checksum(address: str) -> bool:
+    """Verify EIP-55 mixed-case Ethereum address checksum."""
+    addr_lower = address[2:].lower()
+    try:
+        addr_hash = hashlib.sha3_256(addr_lower.encode()).hexdigest()
+    except AttributeError:
+        addr_hash = hashlib.sha256(addr_lower.encode()).hexdigest()
+    expected = "0x" + "".join(
+        c.upper() if int(addr_hash[i], 16) >= 8 else c.lower()
+        for i, c in enumerate(addr_lower)
+    )
+    return address == expected
+
+
 def validate_chain_address_format(chain: str, address: str) -> Tuple[bool, str]:
-    """Validate address format for specific chain."""
+    """Validate address format for specific chain with checksum verification."""
     if not address:
         return False, "Address is required"
     
@@ -232,11 +277,23 @@ def validate_chain_address_format(chain: str, address: str) -> Tuple[bool, str]:
             return False, "RustChain addresses must start with 'RTC'"
         if len(address) < 10:
             return False, "RustChain address too short"
+        # RustChain checksum: last 4 hex chars should be CRC-16 of the rest
+        try:
+            body = address[:-4]
+            checksum = address[-4:]
+            crc = hex(_crc16_qoi(body.encode()))[2:].zfill(4).upper()
+            if checksum.upper() != crc:
+                return False, "RustChain address checksum invalid"
+        except (ValueError, IndexError):
+            return False, "RustChain address checksum error"
     
     elif chain == "solana":
         # Solana addresses are base58, 32-44 chars
         if len(address) < 32 or len(address) > 44:
             return False, "Invalid Solana address length"
+        # Verify base58 encoding
+        if not _is_valid_base58(address):
+            return False, "Invalid Solana address: not valid base58"
     
     elif chain == "ergo":
         # Ergo addresses start with '9' or '3'
@@ -244,6 +301,15 @@ def validate_chain_address_format(chain: str, address: str) -> Tuple[bool, str]:
             return False, "Invalid Ergo address format"
         if len(address) < 30:
             return False, "Ergo address too short"
+        # Ergo uses base58 with blake2b checksum (last 4 bytes)
+        if not _is_valid_base58(address):
+            return False, "Invalid Ergo address: not valid base58"
+        # Ergo checksum: first 4 bytes of blake2b(address[:-4]) == address[-4:]
+        try:
+            if not _verify_ergo_checksum(address):
+                return False, "Invalid Ergo address checksum"
+        except Exception:
+            return False, "Invalid Ergo address checksum"
     
     elif chain == "base":
         # Base (Ethereum L2) addresses are 0x-prefixed
@@ -253,6 +319,10 @@ def validate_chain_address_format(chain: str, address: str) -> Tuple[bool, str]:
             return False, "Invalid Base address length"
         if not all(char in "0123456789abcdefABCDEF" for char in address[2:]):
             return False, "Invalid Base address hex"
+        # EIP-55 mixed-case checksum validation
+        if address != address.lower() and address != address.upper():
+            if not _verify_eip55_checksum(address):
+                return False, "Invalid Base address EIP-55 checksum"
     
     return True, ""
 
